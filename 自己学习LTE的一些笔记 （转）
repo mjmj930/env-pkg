@@ -1,0 +1,305 @@
+
+子载波：LTE采用的是OFDM技术，OFDM则是每个Symbol都对应一个正交的子载波，通过载波间的正交性来对抗干扰。协议规定，通常情况下子载波间隔15khz，Normal CP(Cyclic Prefix)情况下，每个子载波一个slot有7个symbol；Extend CP情况下，每个子载波一个slot有6个symbol。工作中，绝大多数碰到的，还是Normal CP，记住7个symbol就足够了。
+RE(Resource Element)：频率上一个子载波及时域上一个symbol，称为一个RE。
+RB(Resource Block)：频率上连续12个子载波，时域上一个slot，称为1个RB。根据一个子载波带宽是15k可以得出1个RB的带宽为180kHz。
+REG（Resource Element Group）：一个REG包括4个连续未被占用的RE。REG主要针对PCFICH和PHICH速率很小的控制信道资源分配，提高资源的利用效率和分配灵活性。
+CCE（Control Channel Element）：每个CCE由9个REG组成，之所以定义相对于REG较大的CCE，是为了用于数据量相对较大的PDCCH的资源分配。每个用户的PDCCH只能占用1，2，4，8个CCE，称为聚合级别。
+
+TD-LTE中20M带宽的采样率是30.72M,15K的子载波间隔对应的采样点采用的是2048，所以采样率是15k*2048=30.72M。可以简单算下：1个子帧是1ms,一个时隙0.5m有7个ofdm符号（normal）,第一个符号的cp是160，之后6个是144，所以一个子帧的采样点个数就是 【（166+2048）+（144+2048）*6】*2=30720，所以一个无线帧（10ms）的采样点个数是30720*10=307200。像10M带宽采样率会降低些，跟dfft的实现有关
+
+20M的信道带宽是无线分配给你使用的带宽，这个是实际网络规划的时候分配的。18M的传输带宽是实际算出来的，100×12×15KHz=18000KHz=18MHz。因为fft2048，所以采样率跟你的带宽有关=2048×15KHz=30.72MHz
+
+很简单的问题，本来应该实现1200点变换，但是这个在技术上实现不好实现FFT变换，所以扩展了848个空载波达到2048点，这样的话带宽就是30.72M了，但是实际只有18M的有用带宽，考虑不同带宽之间的干扰，所以低频和高频部分都分别加入1M的间隔。按照30.72M抽样的话实际的抽样频率大于系统本来9M的带宽，满足奈归斯特第一定律。
+
+TD-LTE定义的下行物理信道主要有如下6种类型：
+（1） 物理下行共享信道（PDSCH）：用于承载下行用户信息和高层信令。
+（2） 物理广播信道（PBCH）：用于承载主系统信息块信息，传输用于初始接入的参数。
+（3） 物理多播信道（PMCH）：用于承载多媒体/多播信息。
+（4） 物理控制格式指示信道（PCFICH）：用于承载该子帧上控制区域大小的信息。
+（5） 物理下行控制信道（PDCCH）：用于承载下行控制的信息，如上行调度指令、下行数据传输是指、公共控制信息等。
+（6） 物理HARO指示信道（（PHICH）：用于承载对于终端上行数据的ACK/NACK反馈信息，和HARO机制有关。
+TD-LTE定义的上行物理信道主要有如下3种类型：
+（1） 物理上行共享信道（PUSCH）：用于承载上行用户信息和高层信令。
+（2） 物理上行控制信道（PUCCH）：用于承载上行控制信息。
+（3） 物理随机接入信道（PRACH）：用于承载随机接入前道序列的发送，基站通过对序列的检测以及后续的信令交流，建立起上行同步。
+
+无线帧单位是10ms，而每个无线帧，由10个子帧组成，1ms的子帧，由两个0.5ms的slot时隙组成，一个时隙由七个symbol组成.
+
+虽然RB 是基于一个slot（0.5 ms）定义的，但LTE 中调度的基本时间单位是一个子帧（1 ms， 对应2 个slot），称为一个TTI。一个TTI 内的调度（调度PDSCH 和PUSCH 资源）的最小单位实际上由同一子帧上时间上相连的2 个RB（每个slot 对应一个RB）组成，并被称为RB pair
+
+无论是5ms还是10ms的转换周期，子帧类型涉及到了三种，D U S。D代表下行，就是下行传输的数据；U代表的是上行，就是上行传输的数据；S比较特殊，特殊子帧，这个1ms由3个域组成，DwPTS，GP和UpPTS。7种上下行配比，将这三种子帧类型做了不同程度的搭配，有些情况D多一些，可以想象下行速率就会快些。目前常用的是配比1或2。对于特殊子帧，也有一波内容需要澄清。3GPP 36.211 Table 4.2-1做了解释。我们就看看Normal CP，扩展CP，平时涉及不到，就不要太多考虑。常用的特殊子帧，有5或7两种
+
+对TDD而言， 特殊子帧的DwPTS可用于发送PCFICH/PHICH/PDCCH和PDSCH。这也意味着，特殊子帧可用于发送UL grant（即上行DCI，在PDCCH上传输）和对应PUSCH数据的ACK/NACK（在PHICH上传输）等。
+这里有个特例：对于带正常的循环前缀的特殊子帧配置0和5，或带扩展的循环前缀的特殊子帧配置0和4（见36.211的Table 4.2-1），特殊子帧的DwPTS是不能用于传输PDSCH的（见36.213的7.1.7节）。这些配置下，DwPTS的持续时间都很短，只占3个OFDM符号，所以不用于传输PDSCH。
+对TDD而言， UpPTS可用于发送SRS和PRACH（preamble format 4），但不能用于发送PUCCH和PUSCH（见36.213的8.2节；36.211的5.4节和5.7节）。这是因为UpPTS的持续时间都很短，所以不用于传输PUCCH和PUSCH。也就是说，特殊子帧不能用于发送对应于PDSCH传
+输的ACK/NACK。因此，对于下行PDSCH传输而言，只能使用非特殊子帧来发送对应的ACK/NACK。
+
+对于FDD 和TDD 而言，系统帧的编号范围为0 ~ 1023；一个系统帧内的子帧编号范围为0 ~ 9；一个系统帧内的 slot编号范围为 0 ~ 19，即子帧i包含 slot 2i 和 2i+1.
+每个符号中，可用的符号时间为2048 个 Ts 。
+
+下行传输简介:
+
+UE在开机前并不知道小区（cell）是否存在，也不知道小区是如何工作的。UE要与某个小区进行通信，首先要选择一个运营商（如移动、联通、电信），即选择PLMN。选择完PLMN后，
+1. UE会进行小区搜索，选择一个它认为最好的小区进行驻留。这是根据eNodeB（小区）每隔5 ms发送一次的同步信号PSS/SSS来决定的。通过PSS/SSS，UE能够与小区获得时间和频率上的同步（但没有获得上行时间同步），以及得到小区的PCI等。（见第19章）
+2. UE确定了要进行通信的小区后，需要获取该小区的信息，以便获知如何在该小区上正确地工作。小区会不停地发送与该小区相关的系统信息（MIB/SIB），UE会在需要的时候去获取这些信息。（见第20章）
+3. 获取了小区信息之后，UE就知道了该如何接入该小区，此时UE会发起随机接入过程以便与小区建立连接。（见第21章）
+4. UE与eNodeB建立起连接以后，UE可能需要与eNodeB进行数据传输。eNodeB会通过PDSCH来承载它所发给UE的数据，并通过PDCCH告诉UE对应的PDSCH在哪些无线资源上传输以及如何传输。而UE需要使用ACK/NACK来告诉eNodeB它是否成功接收到了数据。此时ACK/NACK是通过PUCCH或PUSCH来发给eNodeB的。如果UE没有成功接收到下行数据，eNodeB需要重传数据。（见第4、5、6、11章等）
+5. 无线信道条件可能是不断变化的，UE需要将其看到的下行无线信道条件通过CSI（上行传输）反馈给eNodeB，以便eNodeB在下行调度时将信道质量考虑在内。（见第10章）
+6. 当UE与eNodeB之间没有数据传输时，UE并不需要一直保持连接（RRC_CONNECTED）状态，UE可以处于RRC_IDLE态，并每隔一段时间“醒来”一次，去接收Paging消息，以确定是否有呼叫请求。eNodeB还可以通过Paging来告诉UE，系统信息发生了变化。（见第22章）
+
+上行传输简介
+
+1. 随机接入过程中，UE在上行可能需要发送preamble和Msg3以便与小区建立起连接。（见第21章）
+2. 与下行类似，eNodeB在进行上行调度时，需要进行上行信道估计，这是通过对UE发送的SRS进行测量得到的。（见第7章）
+3. 对于上行传输，只有当eNodeB通过UL grant（PDCCH）给UE分配了上行PUSCH资源时，UE才能够使用对应的资源进行上行传输。当UE没有被分配上行PUSCH资源，但又有上行数据要发送时，UE会通过发送SR（Scheduling Request）告诉eNodeB有数据要发送，并请求eNodeB分配上行PUSCH资源。（关于SR，见第14章的介绍）
+4. UE需要告诉eNodeB自己有多少数据要发送，以便eNodeB决定给UE分配多少资源。UE通过SR只是告诉了eNodeB其有上行数据要发，而没有告诉eNodeB有多少数据要发，因此UE需要通过BSR（Buffer Status Report）来告诉eNodeB自己有多少数据需要发送。（见第15章）
+5. UE与eNodeB建立起连接以后，UE可能需要与eNodeB进行数据传输。UE会通过PUSCH来承载它所发给eNodeB的数据。而eNodeB需要使用ACK/NACK来告诉UE它是否成功接收到了数据。此时ACK/NACK是通过PHICH发送给UE的。如果eNodeB没有成功接收到上行数据，UE需要重传数据。（见4.3节、第12章）
+
+6. 无线信道条件可能是不断变化的，UE需要将其看到的下行无线信道条件通过CSI反馈给eNodeB，以便eNodeB在下行调度时将信道质量考虑在内。CSI是通过PUCCH或PUSCH传输的。（见第10章）
+
+
+什么是物理小区ID
+UE进行小区搜索的目的是为了获取小区物理ID和完成下行同步，这个过程是与系统带宽无关的，UE可以直接检测和获取。当UE检测到PSS和SSS时，就能解码出物理小区ID，同时根据PSS和SSS的位置，可以确定下行的子帧时刻，完成下行同步。
+
+在LTE里，物理层是通过物理小区ID（Physical Cell Identities，PCI）来区分不同的小区的。物理小区ID总共有504个，它们被分成168个不同的组（记为N(1)_ID，范围是0-167），每个组又包括3个不同的组内标识（记为N(2)_ID，范围是0-2）。因此，物理小区ID（记为Ncell_ID）可以通过下面的公式计算得到：
+
+
+PSS的全称是Primary Synchronization Signal，即主同步信号，用于传输组内ID即N(2)_ID值。
+SSS的全称是Secondary Synchronization Signal，即辅同步信号，用于传输组ID即N(1)_ID值。
+pss 、sss是物理信号，那么物理信号和物理信道什么关系？个人认为没有任何关系。
+物理信道：对应于一系列RE的集合，需要承载来自高层的信息称为物理信道；如PDCCH、PDSCH等。
+物理信号：对应于物理层使用的一系列RE，但这些RE不传递任何来自高层的信息，如参考信号(RS)，同步信号。
+
+参考信号：
+
+在R9中，下行定义了四种参考信号，分别为分别为小区专用参考信号（C-RS）,用户专用参考信号（UE-RS，又称DM-RS），MBSFN参考信号，位置参考信号（P-RS）。
+在R10中，下行定义了五种参考信号，分别为小区专用参考信号（C-RS）,用户专用参考信号（UE-RS，又称DM-RS），MBSFN参考信号，位置参考信号（P-RS），以及CSI参考信号（CSI-RS）。
+小区特定的参考信号对小区内的所有UE 都有效，其作用包括：（1）可被UE 用于除PMCH 和TM 7/8/9（对应基于非码本的预编码）下的PDSCH 传输之外的其它任何下行物理信道的信道估计；（2）可被UE 用来获取CSI；（3）基于小区特定的参考信号的终端测量可用作决定小区选择和切换的基础。
+
+
+LTE上行采用单载波FDMA技术，参考信号和数据是采用TDM方式复用在一起的。上行参考信号用于如下两个目的。
+(1)上行信道估计，用于eNode B端的相干检测和解调，称为DRS。
+DMRS 主要用于eNodeB 对上行物理信道进行信道估计，以便正确地解调PUCCH 和PUSCH。
+(2)上行信道质量测量，称为SRS。
+
+小区特定的参考序列的生成与小区的PCI（Physical Cell ID）、一个系统帧内的slot号、一个slot内的symbol号以及循环前缀的类型相关。这个序列的变化周期为10 ms，即一个系统帧。小区特定的参考信号由带预定义值（主要由PCI决定）的一系列参考符号（reference symbol）组成.
+通过小区搜索过程，UE 可以得到小区的PCI、10 ms timing（也就知道子帧 0 所在的位置，进而也就知道了每个slot 号所在的位置）、循环前缀配置（也就知道了使用的是正常的循环前缀还是扩展的循环前缀，以及每个symbol 号所在的位置），由于小区特定的参考信号及其时频位置与PCI 是一一对应的，因此在小区搜索过程之后， UE 也就知道了该小区的小区特定的参考信号序列及其时频位置。
+通过接收MIB，UE 又知道了小区特定的天线端口数（1，2 或4），从而知道了小区使用多少个小区特定的参考信号，也即小区特定的参考信号会在哪几个天线端口上传输
+
+TM 7/8/9:
+
+REG:
+只有下行L1/L2控制信令才有REG的概念
+（1）某个REG 所包含的所有RE 必定位于同一个RB 内，且在时域上位于同一个 OFDM符号内；（2）4<=一个 REG中包含的 RE个数<=6；
+（3）一个 REG中只 会用到4 个RE，对于只有一个小区特定的参考信号（即只使用一个天线端口：天线端口0）的配置，第一个OFDM 符号中（包括扩展的循环前缀中的第4 个OFDM 符号）除去参考信号所占的RE，每个REG 还包含了5 个可用的RE。因此在这种情况下，会假设按照2 个天线端口（天线端口0 和1）来计算分配给小区特定的参考信号的RE，这样就能算出所使用的4 个RE，即6 个RE 中有一个RE 是未使用的。
+
+PCFICH（Physical Control Format Indicator CHannel）
+
+用于通知UE 对应下行子帧的控制区域的大小，即控制区域所占的OFDM 符号（OFDM symbol）的个数。或者说，PCFICH 用于指示一个下行子帧中用于传输PDCCH 的OFDM 符号的个数。PCFICH 携带的信息为CFI（Control Format Indicator）
+
+每个小区在每个下行子帧有且仅有一个PCFICH。
+只有PCFICH正确解码才能知道控制区域的大小，因此PCFICH总是放在每个子帧的第一个OFDM 符号中发送。
+
+PHICH（Physical Hybrid-ARQ Indicator CHannel）
+用于对上行PUSCH 传输的数据回应HARQ ACK/NACK。每个TTI 中的每个上行TB 对应一个PHICH，也就是说，当UE 在某小区配置了上行空分复用时，需要2 个PHICH。
+eNodeB 通常会配置只使用第一个OFDM 符号来发送PHICH，这样即使PCFICH 解码失败了， 也不影响PHICH 的解码。但在某些场景下，比如下行系统带宽较小的小区（如1.4 MHz，总共只有6 个RB），其频域分集的增益要比下行系统带宽较大的小区（如20 MHz）的小区要低。通过使用extended PHICH duration，能提高时间分集的增益，从而提高PHICH 的性能。
+小区是通过MasterInformationBlock 的phich-Config 字段来配置PHICH 的。
+多个PHICH 可以映射到相同的RE 集合中发送，这些PHICH 组成了一个PHICH group，即多个PHICH 可以复用到同一个PHICH group 中。
+PHICH group 数越多，可复用的UE 数也就越多，支持调度的上行UE 数也就越多， 但码间干扰也就越大，解调性能也就越差。与此同时，控制区域内可用于PDCCH 的资源数就越少。
+一个PHICH group 可用的正交序列数见36.211 的Table 6.9.1-2。可以看出，对正常的循环前缀 而言，一个PHICH group 支持8 个正交序列，即支持8 个PHICH 复用；对扩展的循环前缀而言， 一个PHICH group 支持4 个正交序列，即支持4 个PHICH 复用。
+每个PHICH group 会映射到3 个REG 中，这3 个REG 是分开的，彼此间隔1/3 下行系统带宽。
+
+
+
+在控制区域的第一个OFDM 符号上，资源首先会分配给PCFICH，PHICH 只能映射到没有被PCFICH 使用的那些RE 上。属于同一个PHICH group 中的所有PHICH 映射到相同的RE 集合上； 不同的PHICH group 使用的RE 集合是不同的。
+
+PDCCH（Physical Downlink Control CHannel）
+主要用于：（1）向UE 发送下行调度信息（ 36.321 中称之为DL Assignment），以便UE 接收PDSCH；（2）向UE 发送上行调度信息（36.321 中称之为UL Grant），以便UE 发送PUSCH；（3）发送非周期性CQI 上报请求；（4）通知MCCH 变化；（5）发送上行功控命令；（6）HARQ 相关信息；（7）携带RNTI：该信息隐式包含在CRC 中等等。
+PDCCH 携带的信息称为DCI（Downlink Control Information）。各种DCI format 及其携带的具体信息可参见36.212 的5.3.3 节。DCI 可能指示小区级的信息（使用SI-RNTI / P-RNTI / RA-RNTI 加扰），也可能指示UE 级的信息（使用C-RNTI / SPS C-RNTI / Temporary C-RNTI 加扰）。
+一个PDCCH 只能携带一个某种format 的DCI。一个小区可以在上行和下行同时调度多个UE， 即一个小区可以在每个子帧发送多个调度信息。每个调度信息在独立的PDCCH 上传输，也就是说，一个小区可以在一个子帧上同时发送多个PDCCH。
+PDCCH 固定使用QPSK 调制。
+
+
+
+PDCCH 有4 种format (格式) {0，1，2，3}，分别对应聚合等级（Aggregation Level）{1，2，4 ，8}。聚合等级表示一个PDCCH 占用的连续的CCE 个数，即前面提到的n。
+
+
+UE只会在聚合等级4和8上监听公共搜索空间，但会在聚合等级1、2、4、8上监听UE特定的搜索空间。
+搜索空间分为公共搜索空间（Common search space）和UE 特定的搜索空间（UE-specific search space）。公共搜索空间空间用于传输与Paging、RA Response、BCCH 等相关的控制信息（小区级别的公共信息），该信息对所有UE 来说都是一样的。UE 特定的搜索空间用于传输与DL-SCH、UL-SCH 等相关的控制信息（UE 级别的信息）。但是当UE 特定的搜索空间没有足够的可用资源时，公共搜索空间也可以用于传输属于某个特定UE 的控制信息。但公共搜索空间只能用于传输较小的DCI format 0/1A/3/3A/1C。（注：DCI fomat 0/1A/3/3A 有相同的大小）
+
+下行DCI 包括DCI format 1/1A/1B/1C/1D/2/2A/2B/2C；上行DCI 包括DCI format 0/4。无论是下行DCI，还是上行DCI，都是通过下行的PDCCH 发送给UE 的。
+注意：不要将PDCCH format 和DCI format 混淆，二者是不同的概念。
+
+上行DCI 主要用于指示上行PUSCH 传输，包括DCI format 0 和DCI format 4。
+下行DCI主要用于发送下行调度分配信息，包括DCI format 1/1A/1B/1C/1D/2/2A/2B/2C。
+DCI format 0不支持空分复用;DCI format 4用于支持空分复用
+DCI format 1/1A/1B/1D不支持下行空分复用，只指示1个TB；DCI format 2/2A/2B/2C用于支持下行空分复用，可指示2个TB；DCI format 1C不支持HARQ。
+
+
+PDCCH 盲检
+步骤一：UE 需要计算可用于PDCCH 的CCE 总数。
+UE 通过PSS/SSS，确定了物理层小区ID（PCI）和frame timing（说得通俗一点，就是subframe number #0 所在的位置，但此时还不知道system frame number）。因为小区特定的参考信号及其frequency shift（指定RS 的位置）与PCI 一一对应，所以间接确定了小区特定的参考信号及其在RB 中的位置（见第19 章关于“小区搜索过程”的介绍）。
+接着UE 就可以进行信道估计并进一步解调PBCH，从而获取system frame number、PHICH 占用的资源分布和天线端口数（见20.1 节关于“MIB”的介绍）。再通过解调PCFICH 获取CFI，就知道了控制区域占用的OFDM 符号数。
+至此，PCFICH的内容已经解调，PHICH的分布由PBCH确定，参考信号分布取决于物理小区ID和PBCH使用的天线端口数，从而PDCCH在一个子帧内所能占用的CCE总数就可以确定了。
+
+步骤二：进行PDCCH盲检。
+
+虽然UE事先并不知道要接收的PDCCH携带的是哪种格式的DCI，也不知道该DCI使用哪个PDCCH candidate进行传输，但UE知道自己处于何种状态以及在该状态下期待收到的DCI信息。例如在IDLE态时UE期待收到Paging；在发起Random Access后UE期待的是RAR；在有上行数据待发送时期待UL Grant等。
+并且UE知道自己的搜索空间，因此知道DCI可能分布在哪些CCE上。对于不同的期望信息，UE尝试使用相应的X-RNTI、可能的DCI format、可能的聚合等级（Aggregation Level，简称AL）去与属于自己的搜索空间内的CCE做CRC校验。如果CRC校验成功，那么UE就知道这个信息是自己需要的，也就知道相应的DCI format，从而进一步解出DCI内容。
+UE不知道要收到的PDCCH使用哪种聚合等级，所以UE会把所有可能性都尝试一遍。例如：对于公共搜索空间，UE需要分别按Aggregation Level = 4和Aggregation Level = 8来搜索。当按AL = 4盲检时，16个CCE需要盲检4次，即有4个PDCCH candidate；当按AL = 8盲检时，16个CCE需要盲检2次，也就是有2个PDCCH candidates；那么对于公共空间来说，一共有4+2=6个PDCCH candidates。而对于UE特定的搜索空间，UE需要分别按Aggregation Level = 1、2、4、8来盲检一遍，此时一共有6+6+2+2=16个PDCCH candidates。（见36.213的Table 9.1.1-1）
+UE在搜索空间进行盲检时，只需对可能出现的DCI format进行尝试解码，并不需要对所有的DCI format进行匹配。可能出现的DCI format取决于UE期望接收什么信息以及传输模式（见36.213的7.1节和8.0节）。例如：如果UE期待接收DL-SCH并使用TM 3，当UE对使用C-RNTI扰码的PDCCH进行解码时，只会使用自己的C-RNTI对DCI format 1A和DCI format 2A进行尝试解码。如果同时该UE期望在该子帧内接收系统信息（SI），则会使用SI-RNTI对DCI format 1A
+和DCI format 1C 进行尝试解码。更确切地说，UE 使用对应DCI format 的payload 长度来尝试盲检。
+在成功解码PDCCH 之前，UE 会在每一个可能的PDCCH candidate 上尝试解码，一旦解码成功就停止解码过程。
+
+
+
+PDSCH
+PDSCH主要用于传输来自DL-SCH和PCH的数据，更确切地说，RAR、Paging、SIB、RRC消息（不包括MIB）和用户数据等最终会在PDSCH上传输。PDSCH是在下行子帧的数据区域（data region）上传输的。
+为了接收PDSCH，UE需要先解码PDCCH。PDCCH携带的DCI指定了在空口上如何传输PDSCH。DCI指定了PDSCH所占的资源、MCS、初传或重传相关信息、层、预编码等信息。
+
+从MAC 层发往物理层的数据是以传输块（Transport Block，TB）的形式组织的。UE 需要确定TB 中包含了多少数据，即确定TB size。
+
+TM模式简介
+在eNodeB侧，每个小区可以选择配置1、2、4、8根发射天线。
+这9种TM模式只用于DL-SCH传输。对于BCH和L1/L2控制信道，可以说使用单天线端口传输或传输分集，但通常不说使用某种TM模式。
+在eNodeB发送初始接入过程的Msg 4之前，UE还不知道使用的TM模式（只有在收到Msg 4之后，UE才会知道配置的TM模式），所以此时eNodeB只会使用默认的TM模式（2或4天线端口时使用TM 2；单天线端口时使用TM 1）。
+TM模式是UE特定的信息，同一小区内的不同UE，可能配置了不同的TM模式。
+配置了载波聚合的UE，在不同的serving cell上可以使用不同的TM模式。
+
+存在多于l条的并行不相关的子信道，即信道矩阵的秩大于1时，可以采用开环空间复用模式，AT24C08使用2个或者多个天线发送多个（最大为4）信息流，以提高传输速率。由于UE不反馈预编码矩阵指示(PMI)信息，因此，基站利用UE传输的“发射秩指示符(Transmit Rank Indication，TRI)”信息来选择空间层的数目。当秩为1时，开环空间复用的数据传输采用发送分集的方式。在其他情况下（秩为2/3/4），开环空间复用的数据发送采用层映射与预编码相结合的方式。
+闭环空间复用模式下，UE对基站反馈“预编码的矩阵指示符(Pre-coding MatrixIndicator，PMI)”信息，基站使用此反馈预编码矩阵进行预编码。闭环空间复用与开环空间复用相类似，都是在多个天线上（最大为4）发射2个码字，但是由于采用了反馈机制，闭环模式下能够获得一定的阵列增益。
+通过空间复用的方式传输多个数据流，可以获得吞吐量的提升，因为其需要根据信道条件反馈预编码矩阵，因此性能提升的关键在于发射端能否根据无线信道状况对数据进行预编码，以便接收端更容易地将信号分解成原始数据流。因此，闭环空间复用适用于高信噪比低相关性的场景以及信道变化较小的情况，如UE移动速度较低盼场景。
+
+
+TB
+从MAC层发往物理层的数据是以传输块（Transport Block，TB）的形式组织的。一个TB对应包含一个MAC PDU的数据块，这个数据块会在一个TTI内发送，同时也是HARQ重传的单位。
+如果UE不支持空分复用，则一个TTI至多会发送一个TB；如果UE支持空分复用，则一个TTI至多会发送2个TB。
+注意：（1）协议中所说的一个TTI至多发送2个TB，是从UE的角度来说的。也就说，对于某个UE而言，在下行传输（非载波聚合）时，eNodeB在一个TTI内至多给该UE发送2个TB；在上行传输时，该UE在一个TTI内至多给eNodeB发送2个TB。而从eNodeB的角度来说，它可以在一个TTI调度多个UE，所以eNodeB在一个TTI可以同时发送或接收多于2个TB；（2）载波聚合下，UE可能同时从多个小区接收数据，或给多个小区发送数据，因此在一个TTI可能发送或接收多于2个的TB，但对应某一个小区，UE在一个TTI可以发送或接收至多2个TB。
+
+codeword
+一个码字（codeword）是对在一个TTI上发送的一个TB进行CRC插入、码块分割并为每个码块插入CRC、信道编码、速率匹配之后，得到的数据码流。每个码字与一个TB相对应，因此一个UE在一个TTI至多发送2个码字。码字可以看作是带出错保护的TB。
+
+layer
+传输层的个数，即层数被称为“传输阶”或“传输秩（rank）”。传输秩是可以动态变化的。
+层数必须小于或等于发射天线端口个数和接收天线端口个数二者的最小值，即“层数 ≤ min(发射天线端口数，接收天线端口数)”。
+单天线端口传输：只有1个codeword，只使用1层，codeword直接映射到层上（见36.211的6.3.3.1节）；
+传输分集：只有1个codeword，使用2或4天线端口传输，分别对应2层或4层（但依然认为rank = 1）。该codeword的所有调制符号按照轮询（round-robin）的方式逐一分布在不同的层上（见36.211的6.3.3.3节）；
+空分复用：可能有1个或2个codeword，可以被映射到1~8层。其层映射过程参见36.211的6.3.3.2节。
+
+antenna port
+天线端口（antenna port）是逻辑上的概念，一个天线端口可以是一个物理发射天线，也可以是多个物理发射天线的合并。在这两种情况下， UE 的接收机（receiver）都不会去分解来自同一个天线端口的信号，因为从终端的角度来看，不管信道是由单个物理发射天线形成的，还是由多个物理发射天线合并而成的，这个天线端口对应的参考信号（Reference Signal）就定义了这个天线端口， 终端都可以根据这个参考信号得到这个天线端口的信道估计。每个天线端口对应一个时频资源网格（time/frequency resource grid），有其独自的参考信号。一个天线端口就是一个信道，终端需要根据这个天线端口对应的参考信号进行信道估计和数据解调。
+
+
+
+PUCCH
+UE需要发送必要的上行L1/L2控制信息以支持上下行数据传输。上行L1/L2控制信息（Uplink Control Information，UCI）包括
+SR（Scheduling Request）：用于向eNodeB请求上行UL-SCH资源。
+HARQ ACK/NACK：对在PDSCH上发送的下行数据进行HARQ确认。
+CSI：Channel State Information，包括CQI、PMI、RI等信息。用于告诉eNodeB下行信道质量等，以帮助eNodeB进行下行调度。
+
+对于PUCCH而言，有几个很重要的限制，并对如何发送上行控制信息有很大影响：
+• 一个UE在一个TTI内至多发送一个PUCCH；
+• 对TDD而言，PUCCH不能在特殊子帧的UpPTS域中发送，即不能在特殊子帧上发送PUCCH；
+• 载波聚合中，PUCCH只能在PCell上发送。
+
+与下行控制信息（DCI）相比，为什么上行控制信息（UCI）只需要携带这么少的信息呢？这里秉承了一个原则：UE只需要告诉eNodeB不知道的信息。
+UE在一个上行子帧内需要发送的上行控制信息可能不同，因此LTE定义了几种不同的PUCCH format（如表8-1所示）。
+
+
+PUSCH
+为了发送PUSCH，UE 需要首先解码PDCCH。PDCCH 携带的DCI（DCI format 0/4，即上行DCI）指定了在空口上如何传输PUSCH。DCI 指定了PUSCH 所占的资源、MCS、初传或重传相关信息、层以及预编码等信息。
+
+
+
+
+
+SPS
+Semi-Persistent Scheduling，简称SPS，半永久性调度，又称为半静态调度。
+简单地说，eNodeB在某个TTI使用SPS C-RNTI加扰的PDCCH指定UE所使用的无线资源（这里将其称为SPS资源），每过一个周期，UE就使用该SPS资源来收或发数据。eNodeB无需在该子帧（这里将其称为SPS子帧）重新下发PDCCH来指定分配的资源。
+由于SPS有“一次分配，多次使用”的特点，不需要在每个TTI都为UE下发DCI（包括上行或下行的DCI），从而降低了对应的PDCCH开销。
+SPS对数据包小，大小基本不变且周期性的业务很有用，如VoIP。这类业务的timing和所需的无线资源都是可预知的。
+只有PCell支持SPS。这是因为SPS主要应用于低速业务，负载低，没有必要使用多个载波单元。
+
+SPS是不支持空分复用的，所以对于DCI format 2/2A/2B/2C而言，只会使能一个TB。
+SPS激活时可以同时传输PDSCH和PUSCH（有一定的timing），但SPS释放时不能同时传输PDSCH和PUSCH。
+SPS调度在上行并不支持DCI format 4，SPS调度在下行使用DCI format 2/2A/2B/2C时，只有一个TB是使能的，所以说SPS是不支持空分复用的。并且从36.213的Table 8-5可以看出，SPS调度在上行只支持单天线端口传输（DCI format 0），从36.213的Table 7.1-6可以看出，SPS调度在下行只支持单天线端口传输或传输分集，这也说明了SPS并不支持空分复用。
+
+HARQ
+
+LTE中只使用incremental redundancy机制。在incremental redundancy中，每一次重传并不需要与初始传输相同。相反，会生成多个coded比特的集合，每个集合都携带相同的信息。当需要重传时，通常会传输与前一次不同的coded bit集合，接收端会把重传的数据与前一次传输的数据进行合并。每次重传的coded bit集合称为一个冗余版本（Redundancy Version，RV）。
+对于DL-SCH和UL-SCH而言，其信道编码采用了Turbo编码。Turbo编码中的systematic bit比parity bit更重要，在初传(initial transmission)中至少需要包含所有的systematic bit和部分parity bit；而在重传(retransmission)中，会包含初传中没有的parity bit。如果初传（注意：这里是“第一次传输”）的接收质量很差或根本没收到，此时重传只带parity bit的RV不如重传包含全部（或部分）systematic bit的RV来得性能好。这里有两种不同的否定应答：NACK和DTX。NACK要求重传额外的parity bit，而DTX要求重传systematic bit（也就是说，针对RV=0的初传，如果HARQ反馈为DTX，则重传的RV依然为0）。总之，基于之前传输尝试的信号质量来决定重传中包含多少systematic bit和parity bit是很重要的。
+
+HARQ功能同时跨越物理层和MAC层。其中发送端生成不同的冗余版本（选用哪个RV是由MAC层告诉物理层的）以及接收端进行软合并、CRC校验是由物理层负责的。在接收端，HARQ buffer通常位于物理层中，这是因为物理层需要对接收到的数据进行软合并和解码处理。
+HARQ protocol是MAC层的功能，HARQ protocol在发送端和接收端都存在。发送端的HARQ操作包括传输和重传TB、接收并处理ACK/NACK等；接收端的HARQ操作包括接收TB，生成ACK/NACK等。
+只有DL-SCH和UL-SCH传输支持HARQ，其它信道是不支持HARQ的。
+
+HARQ使用stop-and-wait protocol（停等协议）来发送数据。LTE使用多个并行的stop-and-wait process：当一个HARQ process在等待确认信息时，发送端可以使用另一个HARQ process来继续发送数据。这些HARQ process共同组成了一个HARQ 实体（HARQ entity），这个实体结合了停等协议，同时允许数据的连续传输。每个UE都有一个HARQ实体。但在载波聚合中，一个UE对应每个载波单元（Component Carrier）都有各自的HARQ实体。
+每个HARQ process在一个TTI只处理一个TB（Transport Block，传输块）。
+在空分复用中，一个TTI会并行传输2个TB，每个TB有各自独立的HARQ确认信息，并使用不同的HARQ process来处理。此时1个HARQ实体包含2个HARQ process集合。
+对于HARQ，只有在对应同一TB，也即同一HARQ process的基础上讨论“初传”、“重传”才有意义。
+
+
+下行HARQ是异步的，eNodeB需要通知UE使用哪个HARQ process来处理接收到的数据。
+上行DCI中并不存在该字段。上行HARQ是同步的，其HARQ process number可以根据timing关系推导出。
+
+HARQ协议在时域上分为同步（synchronous）和异步（asynchronous）两类；在频域上分为自适应（adaptive）和非自适应（non-adaptive）两类。
+异步HARQ（asynchronous HARQ）意味着重传可以发生在任一时刻，也意味着能以任意顺序使用HARQ process。同步HARQ（synchronous HARQ）意味着重传只能在前一次传输之后的固定时刻发送，也意味着在某个特定的子帧，只能使用某个特定的HARQ process。
+同步HARQ的好处在于HARQ process号可以直接从系统帧号/子帧号中推导出来，而无需显式地发送HARQ process number；异步HARQ的好处在于重传调度更加灵活。
+自适应HARQ（adaptive HARQ）意味着可以改变重传所使用的PRB资源以及MCS。非自适应HARQ（non-adaptive HARQ）意味着重传必须与前一次传输（新传或前一次重传）使用相同的PRB资源和MCS。
+
+
+上行HARQ介绍
+上行HARQ指的是对上行数据的ACK/NACK
+上行使用同步HARQ，但重传可以是自适应的，也可以是非自适应的。
+
+
+上行PUSCH传输支持2种传输模式：TM 1（只支持单天线端口传输）和 TM2（支持空分复用）。
+对于FDD而言，如果上行配置的传输模式只支持单天线端口传输，则有8个上行HARQ process；如果上行配置的传输模式支持空分复用，则上行HARQ process数将翻倍，为16个。
+从上面的介绍可以看出，初传和重传、重传和重传之间固定相隔8个子帧，即有同一TB的初传和重传所在子帧的（SFN * 10 + subframeNumber）% 8值相等，在实现时，我们可以使用该值作为对应的HARQ process number。
+
+对于TDD而言，如果上行配置的传输模式只支持单天线端口传输，则不同的TDD上下行配置对应的上行HARQ process数见36.213的Table 8-1所示（见下表）；如果上行配置的传输模式支持空分复用，则上行HARQ process数将翻倍。
+对照图12-3 和12-4 可以看出，TDD 1 和TDD 2（典型的TDD 配置）中的初传和重传都位于相同的子帧号上，因此在实现时，我们可以将HARQ process number 和子帧号一一绑定。如表12-2 和表12-3 所示。
+
+
+UE如何判断是进行新传、自适应重传、非自适应重传还是不进行任何传输（“延迟重传”）:
+（1）如果UE在某个子帧只收到PHICH，且其值为NACK，则使用非自适应重传。
+（2）如果UE在某个子帧只收到PHICH，且其值为ACK，则不进行任何传输。
+（3）给定某个HARQ process，无论收到的PHICH指示的是ACK还是NACK，只要同时还收到PDCCH，则UE会忽略PHICH而使用PDCCH来决定如何进行下一次传输（新传或重传）。
+（4）给定某个HARQ process，即使接收到的PHICH指示为ACK，也不会清空HARQ buffer。此时，还需要通过在当前子帧或后续子帧中接收到的PDCCH中的NDI来决定是进行重传（NDI没有翻转），还是进行新传（NDI翻转）。也即，是否清空HARQ buffer是由对应HARQ process的NDI来决定的。如果UE只收到了ACK，那么接下来的那次重传只能进行自适应重传、而不能进行非自适应重传。
+
+下行HARQ
+下行HARQ是对eNodeB发往UE的PDSCH数据进行确认（Acknowledge）以及重传的处理流程。
+对于下行HARQ，UE可在不同的物理信道上传输需要反馈的ACK/NACK：
+1、UE有动态调度的PUSCH资源：如果在当前需要反馈ACK/NACK的上行子帧，UE被动态地分配了上行PUSCH资源，则ACK/NACK会在PUSCH上传输。该PUSCH有对应的DCI format 0/4。
+2、无PUSCH资源：如果在当前需要反馈ACK/NACK的上行子帧， UE没有上行调度，即不发送PUSCH，则UE会在PUCCH上传输ACK/NACK。
+3、SPS调度的上行传输：分为以下2种情况
+3.a：如果UE在当前子帧上发送的PUSCH对应一个指示上行SPS激活的DCI format 0/4（可能是新传也可能是重传），且需要在该子帧上反馈ACK/NACK，则UE会在PUSCH上传输ACK/NACK。这种情况与动态调度的情况类似。
+3.b：如果UE在配置的周期性SPS子帧上发送PUSCH，且需要在该子帧上反馈ACK/NACK，则UE会在PUSCH上传输ACK/NACK。
+
+   
+下行HARQ使用异步（asynchronous）、自适应（adaptive）的方式
+注意：下行HARQ 是异步的，重传与前一次传输之间、重传与前一传输的ACK/NACK 之间没有固定的timing 关系。但某一次传输与其对应的ACK/NACK 之间是有固定的timing 关系的。
+
+只有TDD 1~6 且非载波聚合的情况下，才有HARQ bundling 和HARQ multiplexing 的概念。
+
+
+SR (Scheduling Request)
+如果UE没有上行数据要传输，eNodeB并不需要为该UE分配上行资源，否则会造成资源的浪费。因此， UE需要先告诉eNodeB自己是否有上行数据需要传输， eNodeB才能决定是否给UE分配上行资源。为此LTE提供了一个上行调度请求（Scheduling Request，SR）的机制。
+在载波聚合中，无论配置了多少个上行载波单元（component carrier），都只需要1个SR就够了，毕竟SR的作用只是告诉eNodeB，本UE有上行数据要发送了，你看着给点上行资源吧！由于PUCCH只在PCell上发送，而SR只在PUCCH上发送，因此SR只在PCell上发送。
+需要明确的是，只有处于RRC_CONNECTED态且保持上行同步的UE才会发送SR；且SR只能用于请求新传数据（而不是重传数据）的UL-SCH资源。
+
+上行同步
+为了保证上行传输的正交性，避免小区内（intra-cell）干扰，eNodeB要求来自同一子帧但不同频域资源（不同的RB）的不同UE的信号到达eNodeB的时间基本上是对齐的。eNodeB只要在循环前缀（Cyclic Prefix）范围内接收到UE所发送的上行数据，就能够正确地解码上行数据，因此上行同步要求来自同一子帧的不同UE的信号到达eNodeB的时间都落在循环前缀范围之内。
+为了保持使用不同循环移位的上行参考信号之间的正交性，也要求接收到的上行参考信号必须是时间对齐的，这也是需要使用上行同步，以保证同一小区的不同UE的上行传输在时间上对齐的原因。
+在UE侧看来，timing advance本质上是接收到下行子帧的起始时间与传输上行子帧的时间之间的一个负偏移（negative offset）。eNodeB通过适当地控制每个UE的偏移，可以控制来自不同UE的上行信号到达eNodeB的时间。对于离eNodeB较远的UE，由于有较大的传输延迟，就要比离eNodeB较近的UE提前发送上行数据。
+
+
+eNodeB 侧的上行子帧和下行子帧的timing 是相同的，而UE 侧的上行子帧和下行子帧的timing 之间有偏移
+不同UE 有各自不同的上行 timing advance，也即上行 timing advance 是UE 级的配置。
+处于上行失步（OUT_OF_SYNC）状态的UE，还是可以接收下行数据的，但是不能发送上行数据。
+eNodeB 通过两种方式给UE 发送Timing Advance Command：
+（1）在随机接入过程中，eNodeB 通过测量接收到的preamble 来确定timing advance 值，并通过RAR 的Timing Advance Command 字段（共11 比特，对应TA 索引值的范围是0~1282）发送给UE。
+2）在RRC_CONNECTED 态，eNodeB 需要维护timing advance 信息。因此，UE 需要不断地更新其上行定时提前量，以保持上行同步。LTE 中，eNodeB 使用一种闭环机制来调整上行定时提前量。
+
+
+Link：https://www.txrjy.com/thread-1013259-1-1.html
